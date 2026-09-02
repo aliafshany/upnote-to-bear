@@ -15,8 +15,8 @@ UpNote, and a matching set in Bear.
    unzip it.
 2. Open the unzipped folder and double-click **`UpNote to Bear.command`**.
 3. macOS will ask whether you're sure you want to open it — click **Open**.
-   (The first time, you may need to right-click the file and choose **Open**
-   instead of double-clicking.)
+   If it refuses outright, open **System Settings → Privacy & Security**,
+   scroll down, and press **Open Anyway**.
 4. Answer the two questions it asks, then wait about a minute.
 
 That's it. Your notes appear in Bear, and a folder called **UpNote to Bear**
@@ -81,6 +81,16 @@ want them, or pass `--no-index` to skip making them.
 - **Bear sometimes shows a tag twice** after a large import — two rows with
   the same name, holding the same notes. It is cosmetic, on Bear's side, and
   you can merge them by renaming one to the name it already has.
+- **Underline and strikethrough become plain text.** The words survive, the
+  styling does not, because Bear's syntax for them differs between its
+  editor modes and guessing wrong would leave literal `~` characters in your
+  notes.
+- **UpNote Spaces are ignored.** Two notebooks with the same name in
+  different Spaces become one tag. If you use Spaces, open an issue with the
+  output of `select space, count(*) from notebooks group by 1` and it can be
+  handled properly.
+- **A locked UpNote notebook exports in plain text**, and templates arrive as
+  ordinary notes.
 
 ---
 

@@ -26,15 +26,19 @@ if [ ! -f "$UPNOTE_DB" ]; then
 Open UpNote once, let it finish syncing, then run this again."
 fi
 
-if [ ! -d "/Applications/Bear.app" ]; then
+if [ ! -d "/Applications/Bear.app" ] && \
+   [ -z "$(mdfind "kMDItemCFBundleIdentifier == 'net.shinyfrog.bear'" 2>/dev/null)" ]; then
   say "${red}Bear is not installed in your Applications folder.${off}"
   say "Your notes will still be converted and saved to the Desktop,"
   say "so you can install Bear and import them later."
   say ""
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  fail "Python 3 is missing. Install Apple's command line tools with:
+# /usr/bin/python3 exists on a fresh Mac but is only a stub that opens the
+# Xcode installer, so ask it to actually run something.
+if ! python3 -c "pass" >/dev/null 2>&1; then
+  fail "Python 3 is not ready on this Mac yet. Install Apple's command line
+tools by running this in Terminal:
 
     xcode-select --install
 

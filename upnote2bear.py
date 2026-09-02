@@ -896,10 +896,21 @@ def bundle_text(bundle):
         return ""
 
 
+def bear_installed():
+    """Ask Launch Services rather than guessing a path: Setapp and other
+    installers do not put Bear in /Applications."""
+    if os.path.isdir("/Applications/Bear.app"):
+        return True
+    found = subprocess.run(
+        ["mdfind", "kMDItemCFBundleIdentifier == 'net.shinyfrog.bear'"],
+        capture_output=True, text=True, check=False)
+    return bool(found.stdout.strip())
+
+
 def import_into_bear(bundles, log=print, batch=5, pause=4.0):
-    if not os.path.isdir("/Applications/Bear.app"):
-        log("Bear is not installed in /Applications, so nothing was "
-            "imported. The converted notes are still on your Desktop.")
+    if not bear_installed():
+        log("Bear does not seem to be installed, so nothing was imported. "
+            "The converted notes are still in the output folder.")
         return False
     log("Importing into Bear. This takes a couple of minutes; Bear may flash "
         "as notes arrive.")
