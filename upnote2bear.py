@@ -30,7 +30,7 @@ import sys
 import time
 import unicodedata
 from html.parser import HTMLParser
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 UPNOTE_DIR = os.path.expanduser(
     "~/Library/Containers/com.getupnote.desktop/Data/Library/"
@@ -594,7 +594,8 @@ def index_notes(out_dir, ordered, note_titles, taken):
 
 
 def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
-            tidy=False, renames=None, tag_map=None, log=print):
+            tidy=False, renames=None, tag_map=None, link_back=False,
+            log=print):
     # UpNote keeps every downloaded attachment here, pictures and files alike.
     image_dir = os.path.join(upnote_dir, "images")
     assets = set(os.listdir(image_dir)) if os.path.isdir(image_dir) else set()
@@ -668,6 +669,8 @@ def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
         text = "# %s\n\n%s" % (title, body.strip())
         if tag_line:
             text = text.rstrip() + "\n\n" + tag_line
+        if link_back:
+            text = text.rstrip() + "\n\n" + MARKER % row["id"]
         text = text.rstrip() + "\n"
 
         modified = (row["updatedAt"] or row["createdAt"] or 0) / 1000.0
@@ -749,6 +752,150 @@ def bear_titles():
                 pass
 
 
+# A note carries the id of the UpNote note it came from, as a link that also
+# works: clicking it opens the original. That link is what lets a later run
+# recognise a note it already imported instead of importing it twice.
+MARKER = "[Open in UpNote](upnote://x-callback-url/openNote?noteId=%s)"
+MARKER_RE = re.compile(r"upnote://x-callback-url/openNote\?noteId=([0-9a-fA-F-]+)")
+# Longer notes go through a reimport instead: a URL that big is unreliable.
+URL_TEXT_LIMIT = 4000
+
+
+def bear_url(action, **params):
+    query = "&".join("%s=%s" % (k, quote(str(v), safe=""))
+                     for k, v in params.items())
+    return "bear://x-callback-url/%s?%s" % (action, query)
+
+
+def bear_notes():
+    """Every live Bear note, keyed by the UpNote id it was made from (or by
+    title, for notes imported before this tool started marking them)."""
+    tmp = os.path.join("/tmp", "bear-sync-%d.sqlite" % os.getpid())
+    try:
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(BEAR_DB + suffix):
+                shutil.copy2(BEAR_DB + suffix, tmp + suffix)
+        db = sqlite3.connect(tmp)
+        by_id, by_title = {}, {}
+        for uid, title, text in db.execute(
+                "select ZUNIQUEIDENTIFIER, ZTITLE, ZTEXT from ZSFNOTE "
+                "where ZTRASHED = 0"):
+            record = (uid, text or "")
+            marker = MARKER_RE.search(text or "")
+            if marker:
+                by_id[marker.group(1)] = record
+            by_title.setdefault(
+                unicodedata.normalize("NFC", (title or "").strip()), record)
+        db.close()
+        return by_id, by_title
+    except (OSError, sqlite3.Error):
+        return None, None
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(tmp + suffix)
+            except OSError:
+                pass
+
+
+def comparable(text):
+    """Bear rewrites asset paths on import, so compare what it would store."""
+    text = unicodedata.normalize("NFC", text or "").strip()
+    text = text.replace("(assets/", "(")
+    text = re.sub(r'<!-- \{"embed":"true"\} -->', "", text)
+    # Bear also drops an image's alt text and renames a file link's label to
+    # the filename, so compare attachments by what they point at, not by how
+    # they are labelled.
+    return re.sub(r"!?\[[^\]]*\]\(([^)/:\s]+\.[A-Za-z0-9-]{1,24})\)",
+                  r"![](\1)", text)
+
+
+def sync_with_bear(bundles, dry_run=False, log=print):
+    """Bring Bear in line with UpNote: add what is new, rewrite what changed,
+    trash what is gone, leave the rest alone. Notes are updated in place, so
+    they keep their Bear identity, their creation date and their backlinks."""
+    by_id, by_title = bear_notes()
+    if by_id is None:
+        log("Could not read Bear's library, so nothing was synced.")
+        return False
+
+    new, changed, unchanged = [], [], 0
+    seen = set()
+    for bundle in bundles:
+        note_id = bundle_source_id(bundle)
+        title = bundle_title(bundle)
+        text = bundle_text(bundle)
+        if not text:
+            continue
+        if note_id:
+            seen.add(note_id)
+        # The notebook contents notes have no UpNote note behind them, so
+        # they are matched on title alone.
+        match = (by_id.get(note_id) if note_id else None) or by_title.get(title)
+        if match is None:
+            new.append((bundle, title))
+        elif comparable(match[1]) != comparable(text):
+            changed.append((bundle, title, match[0], text))
+        else:
+            unchanged += 1
+
+    gone = [(uid, nid) for nid, (uid, _) in by_id.items() if nid not in seen]
+
+    log("New %d, changed %d, unchanged %d, gone from UpNote %d."
+        % (len(new), len(changed), unchanged, len(gone)))
+    if dry_run:
+        for _, title in new:
+            log("  new      %s" % title[:64])
+        for _, title, _, _ in changed:
+            log("  changed  %s" % title[:64])
+        for uid, nid in gone:
+            log("  trash    %s" % nid)
+        log("Nothing was changed. Run again without --dry-run to apply.")
+        return True
+
+    for uid, _ in gone:
+        subprocess.run(["open", bear_url("trash", id=uid)], check=False)
+        time.sleep(1.5)
+
+    for bundle, title, uid, text in changed:
+        has_assets = os.path.isdir(os.path.join(bundle, "assets")) and \
+            os.listdir(os.path.join(bundle, "assets"))
+        if has_assets or len(text) > URL_TEXT_LIMIT:
+            # Attachments cannot travel through a URL, and a very long one is
+            # unreliable, so replace the note wholesale.
+            subprocess.run(["open", bear_url("trash", id=uid)], check=False)
+            time.sleep(1.5)
+            new.append((bundle, title))
+        else:
+            subprocess.run(["open", bear_url(
+                "add-text", id=uid, mode="replace_all", text=text,
+                open_note="no", show_window="no")], check=False)
+            time.sleep(1.5)
+
+    if new:
+        import_into_bear([b for b, _ in new], log=log)
+    else:
+        log("Bear is up to date.")
+    return True
+
+
+def bundle_source_id(bundle):
+    try:
+        with open(os.path.join(bundle, "info.json"), encoding="utf-8") as f:
+            source = json.load(f).get("sourceURL", "")
+    except (OSError, ValueError):
+        return ""
+    return source.rsplit("/", 1)[-1]
+
+
+def bundle_text(bundle):
+    try:
+        with open(os.path.join(bundle, "text.md"), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def import_into_bear(bundles, log=print, batch=5, pause=4.0):
     if not os.path.isdir("/Applications/Bear.app"):
         log("Bear is not installed in /Applications, so nothing was "
@@ -820,6 +967,15 @@ def main(argv=None):
     parser.add_argument("--no-index", action="store_true",
                         help="skip the per-notebook contents notes that "
                              "record UpNote's manual note order")
+    parser.add_argument("--sync", action="store_true",
+                        help="bring Bear in line with UpNote instead of "
+                             "importing everything again: add what is new, "
+                             "rewrite what changed, trash what is gone")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --sync, show what would change and stop")
+    parser.add_argument("--link-back", action="store_true",
+                        help="end each note with a link to the UpNote note it "
+                             "came from (always on with --sync)")
     parser.add_argument("--no-import", action="store_true",
                         help="convert only, do not hand the notes to Bear")
     args = parser.parse_args(argv)
@@ -830,12 +986,15 @@ def main(argv=None):
                       with_index=not args.no_index,
                       tidy=args.tidy_titles,
                       renames=load_renames(args.rename_map),
-                      tag_map=load_renames(args.tag_map))
+                      tag_map=load_renames(args.tag_map),
+                      link_back=args.link_back or args.sync)
     if not bundles:
         print("No notes found.")
         return 1
     print("Saved to: %s" % args.out)
-    if not args.no_import:
+    if args.sync:
+        sync_with_bear(bundles, dry_run=args.dry_run)
+    elif not args.no_import:
         import_into_bear(bundles)
     print("Done.")
     return 0

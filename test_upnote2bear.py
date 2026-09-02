@@ -7,7 +7,8 @@ your own are needed and nothing is imported into Bear.
 
 import unittest
 
-from upnote2bear import (bear_tag, rename_key, safe_name, tidy_title,
+from upnote2bear import (MARKER, MARKER_RE, bear_tag, comparable,
+                         rename_key, safe_name, tidy_title,
                          to_markdown, wiki_link)
 
 
@@ -226,6 +227,37 @@ class Links(unittest.TestCase):
         html = ('<div><a href="https://w.org/Symmetry_(physics)">S</a></div>')
         self.assertEqual(md(html),
                          "[S](<https://w.org/Symmetry_(physics)>)")
+
+
+class Sync(unittest.TestCase):
+    def test_marker_round_trips_the_upnote_id(self):
+        note_id = "019c22e5-ea69-713f-bc5c-0dc9daff70ef"
+        found = MARKER_RE.search("body\n\n" + MARKER % note_id)
+        self.assertEqual(found.group(1), note_id)
+
+    def test_marker_is_not_found_in_an_unmarked_note(self):
+        self.assertIsNone(MARKER_RE.search("just a note\n\n#tag"))
+
+    def test_comparable_ignores_bear_asset_rewriting(self):
+        mine = "# T\n\n![](assets/a.png)"
+        bears = "# T\n\n![](a.png)"
+        self.assertEqual(comparable(mine), comparable(bears))
+
+    def test_comparable_ignores_bear_file_embed_markup(self):
+        mine = "# T\n\n[x.sh](assets/x.sh)"
+        bears = '# T\n\n[x.sh](x.sh)<!-- {"embed":"true"} -->'
+        self.assertEqual(comparable(mine), comparable(bears))
+
+    def test_comparable_ignores_a_dropped_image_alt(self):
+        self.assertEqual(comparable("![some alt](assets/a.png)"),
+                         comparable("![](a.png)"))
+
+    def test_comparable_ignores_a_relabelled_file_link(self):
+        self.assertEqual(comparable("[install.sh (44.6 kB)](assets/x.sh)"),
+                         comparable("[x.sh](x.sh)"))
+
+    def test_comparable_still_sees_a_real_edit(self):
+        self.assertNotEqual(comparable("# T\n\nold"), comparable("# T\n\nnew"))
 
 
 class Malformed(unittest.TestCase):

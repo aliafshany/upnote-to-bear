@@ -134,6 +134,7 @@ python3 upnote2bear.py --no-index       # skip the notebook contents notes
 python3 upnote2bear.py --tidy-titles    # shorten titles clipped from the web
 python3 upnote2bear.py --rename-map my-titles.json
 python3 upnote2bear.py --tag-map my-tags.json
+python3 upnote2bear.py --sync            # update Bear instead of re-importing
 python3 upnote2bear.py --out ~/somewhere/else
 ```
 
@@ -218,12 +219,39 @@ untouched, and Bear's importer only ever adds notes.
 
 ---
 
-## Running it twice
+## Keeping the two copies in step
 
-Running the tool again imports a second copy of every note — Bear has no way
-to know it has seen them before. If you want a clean re-run, move the
-previously imported notes to Bear's trash first (select them in Bear, press
-⌘⌫), then run the tool again.
+The first run copies everything. After that, use `--sync`:
+
+```bash
+python3 upnote2bear.py --sync --dry-run   # show what would change
+python3 upnote2bear.py --sync             # apply it
+```
+
+Sync adds notes that are new in UpNote, rewrites the ones whose text changed,
+trashes the ones you deleted in UpNote, and leaves everything else alone. Most
+notes are updated **in place**, so they keep their Bear identity, their
+creation date, their backlinks and anything Bear knows about them. A note is
+replaced wholesale only when it carries attachments or is very long, since
+neither travels through a URL.
+
+Always look at `--dry-run` first. It prints one line per note — new, changed,
+or trash — and changes nothing.
+
+### How it recognises a note it has seen
+
+Each synced note ends with a link back to the note it came from:
+
+```markdown
+[Open in UpNote](upnote://x-callback-url/openNote?noteId=…)
+```
+
+That link is both a working shortcut — click it and UpNote opens the original
+— and the key sync matches on, so no state file is needed and nothing breaks
+if you move the folder. Notes imported before this existed are matched on
+title once, and gain the link on their first sync.
+
+Without `--sync`, running the tool again imports a second copy of every note.
 
 ---
 

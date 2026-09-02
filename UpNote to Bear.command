@@ -66,13 +66,28 @@ case "$answer_import" in
 esac
 say ""
 
+# Copying again into a Bear that already holds these notes would duplicate
+# every one of them, so offer to update instead.
+SYNC=""
+if [ -z "$IMPORT" ] && [ -d "$HOME/Desktop/UpNote to Bear" ]; then
+  say "3. You have copied your notes before."
+  say "   ${dim}Update the copy in Bear, or add everything again?${off}"
+  printf "   Update the existing notes instead of copying again? [Y/n] "
+  read -r answer_sync
+  case "$answer_sync" in
+    [Nn]*) SYNC="" ;;
+    *)     SYNC="--sync" ;;
+  esac
+  say ""
+fi
+
 # --- run ----------------------------------------------------------------
 
 say "${bold}Working. This usually takes about a minute.${off}"
 say ""
 
 # shellcheck disable=SC2086
-if python3 upnote2bear.py $TRASH $IMPORT; then
+if python3 upnote2bear.py $TRASH $IMPORT $SYNC; then
   say ""
   say "${green}${bold}Finished.${off}"
   if [ -z "$IMPORT" ]; then
