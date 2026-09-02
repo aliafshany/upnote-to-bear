@@ -83,10 +83,10 @@ if python3 upnote2bear.py $TRASH $IMPORT; then
     say "To put them in Bear later, select the notes in that folder"
     say "and open them with Bear."
   fi
-  if [ -f "$HOME/Desktop/UpNote to Bear/MISSING-IMAGES.txt" ]; then
+  if [ -f "$HOME/Desktop/UpNote to Bear/MISSING-ATTACHMENTS.txt" ]; then
     say ""
     say "${dim}Some images were never saved on this Mac by UpNote, so they"
-    say "could not be copied. See MISSING-IMAGES.txt in that folder.${off}"
+    say "could not be copied. See MISSING-ATTACHMENTS.txt in that folder.${off}"
   fi
 else
   say ""

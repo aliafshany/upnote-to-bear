@@ -109,6 +109,10 @@ def has_block(node):
     return any(k.tag in BLOCK for k in node.kids)
 
 
+def contains_image(node):
+    return any(k.tag == "img" or contains_image(k) for k in node.kids)
+
+
 # --------------------------------------------------------------------------
 # tree -> Markdown
 # --------------------------------------------------------------------------
@@ -118,7 +122,7 @@ class Render:
         self.assets = assets      # image filename -> present in images/ dir
         self.note_titles = note_titles or {}   # UpNote note id -> title
         self.used = set()         # attachments carried into the bundle
-        self.absent = set()       # referenced but never downloaded by UpNote
+        self.absent = {}          # never downloaded by UpNote: name -> label
 
     # ---- inline ----
 
@@ -169,8 +173,14 @@ class Render:
             name = re.search(r"[?&]tag=([^&]+)", href)
             if name:
                 return bear_tag(unquote(name.group(1)))
-        # UpNote's loopback links (open-original, attachment viewer) point at
-        # a local server that only runs inside UpNote.
+        # A file attachment: UpNote serves it from /files/ rather than the
+        # /images/ path pictures use, but the bytes sit in the same folder.
+        # Anchors that merely wrap a picture are left to the image handler.
+        attached = re.match(r"https?://localhost:\d+/files/(.+)$", href)
+        if attached and not contains_image(n):
+            return self.attachment(attached.group(1), text)
+        # UpNote's other loopback links (open-original, attachment viewer)
+        # point at a local server that only runs inside UpNote.
         if not href or href.startswith("http://localhost:"):
             return text
         if not text:
@@ -201,10 +211,20 @@ class Render:
         if fname in self.assets:
             self.used.add(fname)
             return "![%s](assets/%s)" % (alt, fname)
-        # UpNote never downloaded this attachment: the bytes exist only in its
+        # UpNote never downloaded this picture: the bytes exist only in its
         # cloud storage, so there is nothing local to carry over.
-        self.absent.add(fname)
+        self.absent[fname] = alt or fname
         return "*[image not stored locally by UpNote: %s]*" % fname
+
+    def attachment(self, fname, label):
+        """A PDF, script, archive or video attached to the note. UpNote's
+        anchor text already reads "install.sh (44.6 kB)", so keep it."""
+        label = label.strip() or fname
+        if fname in self.assets:
+            self.used.add(fname)
+            return "[%s](assets/%s)" % (label, fname)
+        self.absent[fname] = label
+        return "*[file not stored locally by UpNote: %s]*" % label
 
     @staticmethod
     def wrap(s, mark):
@@ -575,6 +595,7 @@ def index_notes(out_dir, ordered, note_titles, taken):
 
 def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
             tidy=False, renames=None, tag_map=None, log=print):
+    # UpNote keeps every downloaded attachment here, pictures and files alike.
     image_dir = os.path.join(upnote_dir, "images")
     assets = set(os.listdir(image_dir)) if os.path.isdir(image_dir) else set()
     tags_by_note, ordered = notebook_paths(db, tag_map)
@@ -589,7 +610,8 @@ def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
     if os.path.isdir(out_dir):
         strays = [e for e in os.listdir(out_dir)
                   if not e.endswith(".textbundle")
-                  and e not in ("MISSING-IMAGES.txt", ".DS_Store")]
+                  and e not in ("MISSING-ATTACHMENTS.txt", "MISSING-IMAGES.txt",
+                                ".DS_Store")]
         if strays:
             raise SystemExit(
                 "%s already exists and holds files this tool did not write "
@@ -655,8 +677,8 @@ def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
             shutil.copy2(os.path.join(image_dir, fname),
                          os.path.join(bundle, "assets", fname))
         carried += len(used)
-        for fname in absent:
-            absent_all.setdefault(fname, []).append(name)
+        for fname, label in absent.items():
+            absent_all.setdefault((fname, label), []).append(name)
         bundles.append(bundle)
 
     made = (index_notes(out_dir, ordered, note_titles, used_names)
@@ -664,26 +686,30 @@ def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
     bundles.extend(made)
 
     if absent_all:
-        with open(os.path.join(out_dir, "MISSING-IMAGES.txt"), "w",
+        with open(os.path.join(out_dir, "MISSING-ATTACHMENTS.txt"), "w",
                   encoding="utf-8") as f:
-            f.write("These images are referenced by your notes but UpNote "
-                    "never saved a copy on this Mac,\nso there was nothing "
-                    "to copy into Bear. To recover them: open the notes "
-                    "below in UpNote\nwhile you are online, let the images "
-                    "load, then run this tool again.\n\n")
-            for fname in sorted(absent_all):
-                f.write("%s\n" % fname)
-                for note in sorted(set(absent_all[fname])):
-                    f.write("    %s\n" % note)
+            f.write("These images and files are referenced by your notes but "
+                    "UpNote never saved a copy\non this Mac, so there was "
+                    "nothing to copy into Bear.\n\nTo recover them: in "
+                    "UpNote go to Settings > Backup, turn on \"Backup "
+                    "attachments\"\nand press Backup now while you are "
+                    "online, then run this tool again.\n\n")
+            for fname, label in sorted(absent_all, key=lambda p: p[1].lower()):
+                f.write("%s\n" % (label if label != fname
+                                   else fname))
+                if label != fname:
+                    f.write("    stored as %s\n" % fname)
+                for note in sorted(set(absent_all[(fname, label)])):
+                    f.write("    in note: %s\n" % note)
 
     log("Converted %d notes." % (len(bundles) - len(made)))
     if made:
         log("Added %d notebook contents notes, preserving the order you "
             "arranged each notebook in." % len(made))
-    log("Copied %d images into the notes." % carried)
+    log("Copied %d images and files into the notes." % carried)
     if absent_all:
-        log("%d images were not saved on this Mac by UpNote - see "
-            "MISSING-IMAGES.txt." % len(absent_all))
+        log("%d images and files were not saved on this Mac by UpNote - "
+            "see MISSING-ATTACHMENTS.txt." % len(absent_all))
     return bundles
 
 

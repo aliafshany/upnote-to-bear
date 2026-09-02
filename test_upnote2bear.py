@@ -41,8 +41,10 @@ class Inline(unittest.TestCase):
                             "</div>"), "https://x.dev")
 
     def test_upnote_loopback_links_are_dropped(self):
+        # Anything served by UpNote's local server that is not an attachment
+        # is meaningless outside the app, so only the text survives.
         self.assertEqual(
-            md('<div><a href="http://localhost:9425/files/a.png">shot</a>'
+            md('<div><a href="http://localhost:9425/preview/a">shot</a>'
                "</div>"), "shot")
 
     def test_note_link_becomes_a_bear_cross_note_link(self):
@@ -68,7 +70,7 @@ class Images(unittest.TestCase):
         html = '<div><img src="http://localhost:9425/images/gone.png"></div>'
         body, used, absent = to_markdown(html, set())
         self.assertIn("not stored locally", body)
-        self.assertEqual(absent, {"gone.png"})
+        self.assertEqual(absent, {"gone.png": "gone.png"})
         self.assertFalse(used)
 
     def test_emoji_served_as_an_image_becomes_the_emoji(self):
@@ -80,6 +82,30 @@ class Images(unittest.TestCase):
         html = ('<div><img src="https://abs-0.twimg.com/emoji/v2/svg/'
                 '1f602.svg"></div>')
         self.assertEqual(md(html), "😂")
+
+    def test_attachment_is_carried_with_its_real_name(self):
+        html = ('<div><a data-file-id="019c22e5__sh" href="http://localhost:'
+                '9425/files/019c22e5.sh">install.sh (44.6 kB)</a></div>')
+        body, used, absent = to_markdown(html, {"019c22e5.sh"})
+        self.assertEqual(body, "[install.sh (44.6 kB)](assets/019c22e5.sh)")
+        self.assertEqual(used, {"019c22e5.sh"})
+        self.assertFalse(absent)
+
+    def test_attachment_upnote_never_downloaded_is_reported(self):
+        html = ('<div><a href="http://localhost:9425/files/gone.pdf">'
+                "report.pdf (2 MB)</a></div>")
+        body, used, absent = to_markdown(html, set())
+        self.assertIn("file not stored locally", body)
+        self.assertIn("report.pdf", body)
+        self.assertEqual(absent, {"gone.pdf": "report.pdf (2 MB)"})
+
+    def test_anchor_wrapping_a_picture_is_not_treated_as_a_file(self):
+        # UpNote wraps images in an /files/ anchor for "open original".
+        html = ('<div><a href="http://localhost:9425/files/x.png">'
+                '<img src="http://localhost:9425/images/a.png"></a></div>')
+        body, used, _ = to_markdown(html, {"a.png"})
+        self.assertEqual(body, "![](assets/a.png)")
+        self.assertEqual(used, {"a.png"})
 
     def test_remote_image_keeps_its_url(self):
         html = '<div><img alt="a" src="https://example.com/p.png"></div>'

@@ -38,6 +38,7 @@ You do not need to close UpNote, and nothing in UpNote is changed or deleted.
 | Code blocks | Code blocks, language kept |
 | Tables | Markdown tables |
 | Images saved on your Mac | Attached inside the note |
+| Files attached to a note (PDF, script, archive, video) | Attached, keeping the original filename |
 | Links from one note to another | Bear cross-note links, `[[Like this]]` |
 | The order you arranged a notebook in | A "notebook contents" note listing it |
 
@@ -50,14 +51,16 @@ sets the date itself, and no file format or URL scheme lets an outside tool
 override it. The notes keep their order relative to each other only through
 the notebook contents notes.
 
-**Images UpNote never downloaded.** UpNote keeps attachments in the cloud and
-only saves a local copy of the ones you have actually looked at recently. Any
-image without a local copy cannot be copied, because the bytes are not on your
-Mac. Those notes get a line reading *[image not stored locally by UpNote: …]*,
-and the full list is written to `MISSING-IMAGES.txt` in the output folder.
+**Attachments UpNote never downloaded.** UpNote keeps images and files in the
+cloud and only saves a local copy of the ones it has had reason to fetch. Any
+attachment without a local copy cannot be carried across, because the bytes are
+not on your Mac. Those notes get a line reading *[image not stored locally by
+UpNote: …]*, and the full list — images and files, with the note each belongs
+to — is written to `MISSING-ATTACHMENTS.txt` in the output folder.
 
-To rescue them: open those notes in UpNote while you're online, scroll so the
-images load, then run this tool again.
+To rescue them: in UpNote open **Settings → Backup**, turn on **Backup
+attachments** and press **Backup now** while you are online, then run this tool
+again.
 
 **Manual note order.** Bear sorts notes by date or title and has no manual
 ordering, so a notebook you arranged by hand cannot keep that arrangement.
@@ -196,7 +199,7 @@ Bear's **File → Import From → Markdown Folder**.
 python3 test_upnote2bear.py
 ```
 
-42 tests covering the conversion, written against the HTML shapes UpNote
+45 tests covering the conversion, written against the HTML shapes UpNote
 actually produces. They use synthetic input, so they need no notes of your own
 and never touch Bear.
 
@@ -207,7 +210,8 @@ After importing, compare the two apps:
 - Bear's sidebar should show your notebook tree as nested tags.
 - The note count in Bear's **All Notes** should equal your UpNote note count,
   plus one note per notebook if you kept the contents notes.
-- Read `MISSING-IMAGES.txt` to see exactly which images could not be copied.
+- Read `MISSING-ATTACHMENTS.txt` to see exactly which images and files could
+  not be copied, and which notes they belong to.
 
 If something looks wrong, everything is recoverable: the notes in UpNote are
 untouched, and Bear's importer only ever adds notes.
