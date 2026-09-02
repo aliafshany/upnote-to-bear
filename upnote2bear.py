@@ -717,22 +717,29 @@ def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
 # Bear import
 # --------------------------------------------------------------------------
 
-def bear_note_count():
-    """Read Bear's own database to confirm what actually landed."""
-    if not os.path.exists(BEAR_DB):
-        return None
-    tmp = os.path.join("/tmp", "bear-count-%d.sqlite" % os.getpid())
+def bundle_title(bundle):
+    try:
+        with open(os.path.join(bundle, "text.md"), encoding="utf-8") as f:
+            first = f.readline().strip()
+    except OSError:
+        return ""
+    return unicodedata.normalize(
+        "NFC", first[2:].strip() if first.startswith("# ") else first)
+
+
+def bear_titles():
+    """Titles of Bear's live notes, read from its own database."""
+    tmp = os.path.join("/tmp", "bear-titles-%d.sqlite" % os.getpid())
     try:
         for suffix in ("", "-wal", "-shm"):
-            src = BEAR_DB + suffix
-            if os.path.exists(src):
-                shutil.copy2(src, tmp + suffix)
+            if os.path.exists(BEAR_DB + suffix):
+                shutil.copy2(BEAR_DB + suffix, tmp + suffix)
         db = sqlite3.connect(tmp)
-        count = db.execute(
-            "select count(*) from ZSFNOTE where ZTRASHED = 0").fetchone()[0]
+        titles = {unicodedata.normalize("NFC", (t or "").strip()) for t, in
+                  db.execute("select ZTITLE from ZSFNOTE where ZTRASHED = 0")}
         db.close()
-        return count
-    except sqlite3.Error:
+        return titles
+    except (OSError, sqlite3.Error):
         return None
     finally:
         for suffix in ("", "-wal", "-shm"):
@@ -742,26 +749,46 @@ def bear_note_count():
                 pass
 
 
-def import_into_bear(bundles, log=print, batch=8, pause=3.0):
+def import_into_bear(bundles, log=print, batch=5, pause=4.0):
     if not os.path.isdir("/Applications/Bear.app"):
         log("Bear is not installed in /Applications, so nothing was "
             "imported. The converted notes are still on your Desktop.")
         return False
-    before = bear_note_count()
-    log("Importing into Bear. This takes about a minute; Bear may flash as "
-        "notes arrive.")
+    log("Importing into Bear. This takes a couple of minutes; Bear may flash "
+        "as notes arrive.")
     for index, bundle in enumerate(bundles, 1):
         subprocess.run(["open", "-a", "Bear", bundle], check=False)
         if index % batch == 0:
             time.sleep(pause)
-    time.sleep(8)
-    after = bear_note_count()
-    if before is not None and after is not None:
-        log("Bear went from %d notes to %d." % (before, after))
-        missing = len(bundles) - (after - before)
-        if missing > 0:
-            log("%d notes may still be arriving - give Bear a moment, then "
-                "check the count in its sidebar." % missing)
+    time.sleep(10)
+
+    # Bear occasionally mishandles a bundle that arrives while it is busy,
+    # filing the folder as an attachment instead of importing it, so check
+    # every note actually landed rather than trusting the count.
+    landed = bear_titles()
+    if landed is None:
+        log("Could not read Bear's library to check the import; look at the "
+            "note count in its sidebar.")
+        return True
+    wanted = {bundle_title(b): b for b in bundles}
+    wanted.pop("", None)
+    stragglers = [b for title, b in wanted.items() if title not in landed]
+    if stragglers:
+        log("%d notes did not arrive; sending them again one at a time."
+            % len(stragglers))
+        for bundle in stragglers:
+            subprocess.run(["open", "-a", "Bear", bundle], check=False)
+            time.sleep(12)
+        landed = bear_titles() or landed
+        stragglers = [b for title, b in wanted.items() if title not in landed]
+
+    if stragglers:
+        log("These notes are still not in Bear - import them by hand from "
+            "the output folder:")
+        for bundle in stragglers[:10]:
+            log("    %s" % os.path.basename(bundle))
+    else:
+        log("All %d notes are in Bear." % len(wanted))
     return True
 
 
