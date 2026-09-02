@@ -7,7 +7,8 @@ your own are needed and nothing is imported into Bear.
 
 import unittest
 
-from upnote2bear import (MARKER, MARKER_RE, bear_tag, comparable,
+from upnote2bear import (MARKER, MARKER_RE, asset_link, bear_tag,
+                         comparable,
                          rename_key, safe_name, tidy_title,
                          to_markdown, wiki_link)
 
@@ -167,6 +168,11 @@ class Blocks(unittest.TestCase):
 
 
 class Naming(unittest.TestCase):
+    def test_asset_with_a_space_or_bracket_is_wrapped(self):
+        self.assertEqual(asset_link("a b.pdf"), "<assets/a b.pdf>")
+        self.assertEqual(asset_link("file(1).zip"), "<assets/file(1).zip>")
+        self.assertEqual(asset_link("plain.png"), "assets/plain.png")
+
     def test_tag_with_spaces_gets_a_closing_hash(self):
         self.assertEqual(bear_tag("2- Area/Apple ID"), "#2- Area/Apple ID#")
         self.assertEqual(bear_tag("work"), "#work")
@@ -266,6 +272,18 @@ class Sync(unittest.TestCase):
     def test_comparable_ignores_a_relabelled_file_link(self):
         self.assertEqual(comparable("[install.sh (44.6 kB)](assets/x.sh)"),
                          comparable("[x.sh](x.sh)"))
+
+    def test_last_marker_wins_over_a_quoted_one(self):
+        body = (MARKER % "aaaa") + "\n\nmid-note quote\n\n" + (MARKER % "bbbb")
+        self.assertEqual(MARKER_RE.findall(body)[-1], "bbbb")
+
+    def test_comparable_matches_a_destination_without_an_extension(self):
+        self.assertEqual(comparable("[x](assets/README)"),
+                         comparable("[README](README)"))
+
+    def test_comparable_leaves_a_web_link_alone(self):
+        self.assertNotEqual(comparable("[one](https://x.dev/a.png)"),
+                            comparable("[two](https://x.dev/a.png)"))
 
     def test_comparable_still_sees_a_real_edit(self):
         self.assertNotEqual(comparable("# T\n\nold"), comparable("# T\n\nnew"))

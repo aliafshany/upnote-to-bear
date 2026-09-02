@@ -178,7 +178,7 @@ class Render:
         # Anchors that merely wrap a picture are left to the image handler.
         attached = re.match(r"https?://localhost:\d+/files/(.+)$", href)
         if attached and not contains_image(n):
-            return self.attachment(attached.group(1), text)
+            return self.attachment(unquote(attached.group(1)), text)
         # UpNote's other loopback links (open-original, attachment viewer)
         # point at a local server that only runs inside UpNote.
         if not href or href.startswith("http://localhost:"):
@@ -207,10 +207,10 @@ class Render:
         local = re.match(r"https?://localhost:\d+/images/(.+)$", src)
         if not local:
             return "![%s](%s)" % (alt, src)      # remote image, keep the URL
-        fname = local.group(1)
+        fname = unquote(local.group(1))
         if fname in self.assets:
             self.used.add(fname)
-            return "![%s](assets/%s)" % (alt, fname)
+            return "![%s](%s)" % (alt, asset_link(fname))
         # UpNote never downloaded this picture: the bytes exist only in its
         # cloud storage, so there is nothing local to carry over.
         self.absent[fname] = alt or fname
@@ -222,7 +222,7 @@ class Render:
         label = label.strip() or fname
         if fname in self.assets:
             self.used.add(fname)
-            return "[%s](assets/%s)" % (label, fname)
+            return "[%s](%s)" % (label, asset_link(fname))
         self.absent[fname] = label
         return "*[file not stored locally by UpNote: %s]*" % label
 
@@ -378,6 +378,13 @@ def wiki_link(title):
     if any(c in title for c in "/|[]"):
         return "\u201c%s\u201d" % title
     return "[[%s]]" % title
+
+
+def asset_link(fname):
+    """A filename containing a space or a bracket has to be wrapped, or the
+    link ends at the first one and the file is never attached."""
+    target = "assets/" + fname
+    return "<%s>" % target if re.search(r"[ ()<>]", fname) else target
 
 
 def bear_tag(name):
@@ -583,6 +590,10 @@ def index_notes(out_dir, ordered, note_titles, taken):
             # Two notebooks share a leaf name; name this one for its parent.
             name = safe_name("%s (notebook contents)"
                              % path.replace("/", " - "), name)
+            key = name.lower()
+            taken[key] = taken.get(key, 0) + 1
+            if taken[key] > 1:
+                name = "%s (%d)" % (name, taken[key])
         lines = ["# %s" % name, "",
                  "The notes of *%s*, in the order they were arranged in "
                  "UpNote." % path, ""]
@@ -730,28 +741,6 @@ def bundle_title(bundle):
         "NFC", first[2:].strip() if first.startswith("# ") else first)
 
 
-def bear_titles():
-    """Titles of Bear's live notes, read from its own database."""
-    tmp = os.path.join("/tmp", "bear-titles-%d.sqlite" % os.getpid())
-    try:
-        for suffix in ("", "-wal", "-shm"):
-            if os.path.exists(BEAR_DB + suffix):
-                shutil.copy2(BEAR_DB + suffix, tmp + suffix)
-        db = sqlite3.connect(tmp)
-        titles = {unicodedata.normalize("NFC", (t or "").strip()) for t, in
-                  db.execute("select ZTITLE from ZSFNOTE where ZTRASHED = 0")}
-        db.close()
-        return titles
-    except (OSError, sqlite3.Error):
-        return None
-    finally:
-        for suffix in ("", "-wal", "-shm"):
-            try:
-                os.remove(tmp + suffix)
-            except OSError:
-                pass
-
-
 # A note carries the id of the UpNote note it came from, as a link that also
 # works: clicking it opens the original. That link is what lets a later run
 # recognise a note it already imported instead of importing it twice.
@@ -790,11 +779,16 @@ def bear_notes():
                 "select ZUNIQUEIDENTIFIER, ZTITLE, ZTEXT from ZSFNOTE "
                 "where ZTRASHED = 0"):
             record = (uid, text or "", uid in with_files)
-            marker = MARKER_RE.search(text or "")
-            if marker:
-                by_id.setdefault(marker.group(1), []).append(record)
-            by_title.setdefault(
-                unicodedata.normalize("NFC", (title or "").strip()), record)
+            # The last marker is the trailing one this tool wrote; an earlier
+            # match would be a link the note happens to quote.
+            marks = MARKER_RE.findall(text or "")
+            if marks:
+                by_id.setdefault(marks[-1], []).append(record)
+            # Several notes can share a title, so keep them all, unmarked
+            # first: those are the ones a title match may safely claim.
+            key = unicodedata.normalize("NFC", (title or "").strip())
+            bucket = by_title.setdefault(key, [])
+            bucket.insert(0, record) if not marks else bucket.append(record)
         db.close()
         return by_id, by_title
     except (OSError, sqlite3.Error):
@@ -815,7 +809,7 @@ def comparable(text):
     # Bear also drops an image's alt text and renames a file link's label to
     # the filename, so compare attachments by what they point at, not by how
     # they are labelled.
-    return re.sub(r"!?\[[^\n]*?\]\(([^)/:\s]+\.[A-Za-z0-9_-]{1,24})\)",
+    return re.sub(r"!?\[[^\n]*?\]\(<?((?!https?:|mailto:|bear:|upnote:)[^)>\n]+)>?\)",
                   r"![](\1)", text)
 
 
@@ -838,10 +832,12 @@ def sync_with_bear(bundles, dry_run=False, log=print):
         note_id = bundle_source_id(bundle)
         title = bundle_title(bundle)
         text = bundle_text(bundle)
-        if not text:
-            continue
         if note_id:
             seen.add(note_id)
+        if not text:
+            # Unreadable bundle: leave whatever Bear holds alone rather than
+            # treating the note as deleted.
+            continue
         # The notebook contents notes have no UpNote note behind them, so
         # they are matched on title alone.
         match = None
@@ -851,13 +847,16 @@ def sync_with_bear(bundles, dry_run=False, log=print):
             # Any further note carrying the same marker is a stray copy.
             extra.extend((rec[0], note_id) for rec in duplicates[1:])
         else:
-            candidate = by_title.get(title)
             # Matching on title is only safe for a note nothing else owns:
             # one that already carries a marker belongs to another note, and
             # overwriting it would lose its content and then flip back and
-            # forth between the two on every run.
-            if candidate is not None and not MARKER_RE.search(candidate[1]):
-                match = candidate
+            # forth between the two on every run. Claiming it also removes it
+            # from the pool, so two same-titled notes cannot both take it.
+            for candidate in by_title.get(title, []):
+                if not MARKER_RE.search(candidate[1]):
+                    match = candidate
+                    by_title[title].remove(candidate)
+                    break
         if match is None:
             new.append((bundle, title))
         elif comparable(match[1]) != comparable(text):
@@ -865,8 +864,14 @@ def sync_with_bear(bundles, dry_run=False, log=print):
         else:
             unchanged += 1
 
-    gone = [(recs[0][0], nid) for nid, recs in by_id.items()
-            if nid not in seen] + extra
+    gone = [(rec[0], nid) for nid, recs in by_id.items()
+            if nid not in seen for rec in recs] + extra
+    # Contents notes carry no marker, so they are recognised by name: any in
+    # Bear that this run did not produce belongs to a notebook that is gone.
+    made = {bundle_title(b) for b in bundles}
+    for title, records in by_title.items():
+        if title.endswith("(notebook contents)") and title not in made:
+            gone += [(rec[0], title) for rec in records]
 
     log("New %d, changed %d, unchanged %d, gone from UpNote %d."
         % (len(new), len(changed), unchanged, len(gone)))
@@ -887,8 +892,9 @@ def sync_with_bear(bundles, dry_run=False, log=print):
     for bundle, title, uid, text, bear_has_files in changed:
         assets = os.path.join(bundle, "assets")
         has_assets = os.path.isdir(assets) and os.listdir(assets)
-        if (has_assets or bear_has_files
-                or len(quote(text, safe="")) > URL_TEXT_LIMIT):
+        encoded = len(bear_url("add-text", id=uid, mode="replace_all",
+                               text=text, open_note="no", show_window="no"))
+        if has_assets or bear_has_files or encoded > URL_TEXT_LIMIT:
             # Attachments cannot travel through a URL, and a very long one is
             # unreliable, so replace the note wholesale.
             subprocess.run(["open", bear_url("trash", id=uid)], check=False)
@@ -955,22 +961,36 @@ def import_into_bear(bundles, log=print, batch=5, pause=4.0):
     # Bear occasionally mishandles a bundle that arrives while it is busy,
     # filing the folder as an attachment instead of importing it, so check
     # every note actually landed rather than trusting the count.
-    landed = bear_titles()
-    if landed is None:
-        log("Could not read Bear's library to check the import; look at the "
-            "note count in its sidebar.")
-        return True
-    wanted = {bundle_title(b): b for b in bundles}
-    wanted.pop("", None)
-    stragglers = [b for title, b in wanted.items() if title not in landed]
+    def absent(candidates):
+        """Which bundles are not in Bear, judged by the marker they carry so
+        that a same-titled note cannot be mistaken for one of them."""
+        by_id, by_title = bear_notes()
+        if by_id is None:
+            return None
+        missing = []
+        for bundle in candidates:
+            note_id = bundle_source_id(bundle)
+            if note_id:
+                if note_id not in by_id:
+                    missing.append(bundle)
+                continue
+            title = bundle_title(bundle)      # contents notes carry no id
+            if title and title not in by_title:
+                missing.append(bundle)
+        return missing
+
+    stragglers = absent(bundles)
+    if stragglers is None:
+        log("PROBLEM - could not read Bear's library to check the import. "
+            "Compare the note count in its sidebar before trusting this run.")
+        return False
     if stragglers:
         log("%d notes did not arrive; sending them again one at a time."
             % len(stragglers))
         for bundle in stragglers:
             subprocess.run(["open", "-a", "Bear", bundle], check=False)
             time.sleep(12)
-        landed = bear_titles() or landed
-        stragglers = [b for title, b in wanted.items() if title not in landed]
+        stragglers = absent(stragglers) or []
 
     if stragglers:
         log("PROBLEM - these notes did not reach Bear. Import them by hand "
@@ -978,7 +998,7 @@ def import_into_bear(bundles, log=print, batch=5, pause=4.0):
         for bundle in stragglers[:10]:
             log("    %s" % os.path.basename(bundle))
         return False
-    log("All %d notes are in Bear." % len(wanted))
+    log("All %d notes are in Bear." % len(bundles))
     return True
 
 
