@@ -468,7 +468,22 @@ def open_upnote(work_dir, upnote_dir):
     return db
 
 
-def notebook_paths(db):
+def apply_tag_map(path, tag_map):
+    """Rename a notebook path, and everything under it, on the way out.
+    {"1- Projects": "1-Projects"} turns 1- Projects/Trade into
+    1-Projects/Trade."""
+    if not tag_map:
+        return path
+    parts = path.split("/")
+    for depth in range(len(parts), 0, -1):
+        head = "/".join(parts[:depth])
+        if head in tag_map:
+            tail = parts[depth:]
+            return "/".join([tag_map[head]] + tail) if tail else tag_map[head]
+    return path
+
+
+def notebook_paths(db, tag_map=None):
     """UpNote stores notebook membership in `lists` rows keyed
     notebooks_<notebookId>, each holding a JSON array of note ids."""
     books = {r["id"]: (r["title"] or "", r["parent"] or "")
@@ -489,7 +504,7 @@ def notebook_paths(db):
     per_note, ordered = {}, {}
     for row in db.execute("select id, content from lists where id like "
                           "'notebooks_%' and coalesce(deleted, 0) = 0"):
-        path = path_of(row["id"][len("notebooks_"):])
+        path = apply_tag_map(path_of(row["id"][len("notebooks_"):]), tag_map)
         if not path:
             continue
         try:
@@ -559,10 +574,10 @@ def index_notes(out_dir, ordered, note_titles, taken):
 
 
 def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
-            tidy=False, renames=None, log=print):
+            tidy=False, renames=None, tag_map=None, log=print):
     image_dir = os.path.join(upnote_dir, "images")
     assets = set(os.listdir(image_dir)) if os.path.isdir(image_dir) else set()
-    tags_by_note, ordered = notebook_paths(db)
+    tags_by_note, ordered = notebook_paths(db, tag_map)
 
     where = "coalesce(deleted, 0) = 0"
     if not include_trash:
@@ -746,6 +761,9 @@ def main(argv=None):
     parser.add_argument("--rename-map", metavar="FILE",
                         help="JSON file of {\"old title\": \"new title\"} "
                              "applied before everything else")
+    parser.add_argument("--tag-map", metavar="FILE",
+                        help="JSON file of {\"UpNote notebook\": \"Bear tag\"} "
+                             "renames; child notebooks follow their parent")
     parser.add_argument("--no-index", action="store_true",
                         help="skip the per-notebook contents notes that "
                              "record UpNote's manual note order")
@@ -758,7 +776,8 @@ def main(argv=None):
                       include_trash=args.include_trash,
                       with_index=not args.no_index,
                       tidy=args.tidy_titles,
-                      renames=load_renames(args.rename_map))
+                      renames=load_renames(args.rename_map),
+                      tag_map=load_renames(args.tag_map))
     if not bundles:
         print("No notes found.")
         return 1
