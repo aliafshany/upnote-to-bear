@@ -576,19 +576,19 @@ def index_notes(out_dir, ordered, note_titles, taken):
         if len(members) < 2:
             continue
         leaf = path.rsplit("/", 1)[-1]
-        lines = ["# %s (notebook contents)" % leaf, "",
+        name = safe_name("%s (notebook contents)" % leaf, "Notebook contents")
+        key = name.lower()
+        taken[key] = taken.get(key, 0) + 1
+        if taken[key] > 1:
+            # Two notebooks share a leaf name; name this one for its parent.
+            name = safe_name("%s (notebook contents)"
+                             % path.replace("/", " - "), name)
+        lines = ["# %s" % name, "",
                  "The notes of *%s*, in the order they were arranged in "
                  "UpNote." % path, ""]
         lines += ["%d. %s" % (i, wiki_link(note_titles[n]))
                   for i, n in enumerate(members, 1)]
         lines += ["", bear_tag(path)]
-        name = safe_name("%s (notebook contents)" % leaf, "Notebook contents")
-        # Two notebooks can share a leaf name under different parents, and a
-        # real note could already own this filename; never overwrite either.
-        key = name.lower()
-        taken[key] = taken.get(key, 0) + 1
-        if taken[key] > 1:
-            name = "%s (%d)" % (name, taken[key])
         made.append(write_bundle(out_dir, name, "\n".join(lines) + "\n"))
     return made
 
@@ -756,9 +756,12 @@ def bear_titles():
 # works: clicking it opens the original. That link is what lets a later run
 # recognise a note it already imported instead of importing it twice.
 MARKER = "[Open in UpNote](upnote://x-callback-url/openNote?noteId=%s)"
-MARKER_RE = re.compile(r"upnote://x-callback-url/openNote\?noteId=([0-9a-fA-F-]+)")
+MARKER_RE = re.compile(
+    r"\[Open in UpNote\]\(upnote://x-callback-url/openNote\?noteId="
+    r"([0-9a-fA-F-]+)\)")
 # Longer notes go through a reimport instead: a URL that big is unreliable.
-URL_TEXT_LIMIT = 4000
+# Measured on the encoded URL, since quoting expands non-Latin text severalfold.
+URL_TEXT_LIMIT = 8000
 
 
 def bear_url(action, **params):
@@ -789,7 +792,7 @@ def bear_notes():
             record = (uid, text or "", uid in with_files)
             marker = MARKER_RE.search(text or "")
             if marker:
-                by_id[marker.group(1)] = record
+                by_id.setdefault(marker.group(1), []).append(record)
             by_title.setdefault(
                 unicodedata.normalize("NFC", (title or "").strip()), record)
         db.close()
@@ -812,7 +815,7 @@ def comparable(text):
     # Bear also drops an image's alt text and renames a file link's label to
     # the filename, so compare attachments by what they point at, not by how
     # they are labelled.
-    return re.sub(r"!?\[[^\]]*\]\(([^)/:\s]+\.[A-Za-z0-9_-]{1,24})\)",
+    return re.sub(r"!?\[[^\n]*?\]\(([^)/:\s]+\.[A-Za-z0-9_-]{1,24})\)",
                   r"![](\1)", text)
 
 
@@ -825,8 +828,12 @@ def sync_with_bear(bundles, dry_run=False, log=print):
         log("Could not read Bear's library, so nothing was synced.")
         return False
 
+    if not bear_installed():
+        log("Bear does not seem to be installed, so nothing was synced.")
+        return False
+
     new, changed, unchanged = [], [], 0
-    seen = set()
+    seen, extra = set(), []
     for bundle in bundles:
         note_id = bundle_source_id(bundle)
         title = bundle_title(bundle)
@@ -837,7 +844,20 @@ def sync_with_bear(bundles, dry_run=False, log=print):
             seen.add(note_id)
         # The notebook contents notes have no UpNote note behind them, so
         # they are matched on title alone.
-        match = (by_id.get(note_id) if note_id else None) or by_title.get(title)
+        match = None
+        duplicates = by_id.get(note_id, []) if note_id else []
+        if duplicates:
+            match = duplicates[0]
+            # Any further note carrying the same marker is a stray copy.
+            extra.extend((rec[0], note_id) for rec in duplicates[1:])
+        else:
+            candidate = by_title.get(title)
+            # Matching on title is only safe for a note nothing else owns:
+            # one that already carries a marker belongs to another note, and
+            # overwriting it would lose its content and then flip back and
+            # forth between the two on every run.
+            if candidate is not None and not MARKER_RE.search(candidate[1]):
+                match = candidate
         if match is None:
             new.append((bundle, title))
         elif comparable(match[1]) != comparable(text):
@@ -845,7 +865,8 @@ def sync_with_bear(bundles, dry_run=False, log=print):
         else:
             unchanged += 1
 
-    gone = [(uid, nid) for nid, (uid, _, _) in by_id.items() if nid not in seen]
+    gone = [(recs[0][0], nid) for nid, recs in by_id.items()
+            if nid not in seen] + extra
 
     log("New %d, changed %d, unchanged %d, gone from UpNote %d."
         % (len(new), len(changed), unchanged, len(gone)))
@@ -866,7 +887,8 @@ def sync_with_bear(bundles, dry_run=False, log=print):
     for bundle, title, uid, text, bear_has_files in changed:
         assets = os.path.join(bundle, "assets")
         has_assets = os.path.isdir(assets) and os.listdir(assets)
-        if has_assets or bear_has_files or len(text) > URL_TEXT_LIMIT:
+        if (has_assets or bear_has_files
+                or len(quote(text, safe="")) > URL_TEXT_LIMIT):
             # Attachments cannot travel through a URL, and a very long one is
             # unreliable, so replace the note wholesale.
             subprocess.run(["open", bear_url("trash", id=uid)], check=False)

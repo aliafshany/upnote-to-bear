@@ -238,6 +238,17 @@ class Sync(unittest.TestCase):
     def test_marker_is_not_found_in_an_unmarked_note(self):
         self.assertIsNone(MARKER_RE.search("just a note\n\n#tag"))
 
+    def test_a_bare_upnote_url_in_the_body_is_not_a_marker(self):
+        # A note can quote an UpNote link in a code block; only the real
+        # trailing marker identifies the note.
+        body = ("```\nupnote://x-callback-url/openNote?noteId=aaaa\n```\n\n"
+                + MARKER % "bbbb")
+        self.assertEqual(MARKER_RE.search(body).group(1), "bbbb")
+
+    def test_comparable_handles_a_label_containing_brackets(self):
+        self.assertEqual(comparable("[report [final].pdf (2 MB)](assets/r.pdf)"),
+                         comparable("[r.pdf](r.pdf)"))
+
     def test_comparable_ignores_bear_asset_rewriting(self):
         mine = "# T\n\n![](assets/a.png)"
         bears = "# T\n\n![](a.png)"
