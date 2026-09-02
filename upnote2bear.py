@@ -900,11 +900,15 @@ def sync_with_bear(bundles, dry_run=False, log=print):
                 open_note="no", show_window="no")], check=False)
             time.sleep(1.5)
 
+    ok = True
     if new:
-        import_into_bear([b for b, _ in new], log=log)
-    else:
-        log("Bear is up to date.")
-    return True
+        ok = import_into_bear([b for b, _ in new], log=log)
+    if not changed and not new and not gone:
+        log("OK - nothing to do, Bear already matches UpNote.")
+    elif ok:
+        log("OK - %d added, %d updated, %d removed."
+            % (len(new), len(changed) - len(new), len(gone)))
+    return ok
 
 
 def bundle_source_id(bundle):
@@ -969,12 +973,12 @@ def import_into_bear(bundles, log=print, batch=5, pause=4.0):
         stragglers = [b for title, b in wanted.items() if title not in landed]
 
     if stragglers:
-        log("These notes are still not in Bear - import them by hand from "
-            "the output folder:")
+        log("PROBLEM - these notes did not reach Bear. Import them by hand "
+            "from the output folder:")
         for bundle in stragglers[:10]:
             log("    %s" % os.path.basename(bundle))
-    else:
-        log("All %d notes are in Bear." % len(wanted))
+        return False
+    log("All %d notes are in Bear." % len(wanted))
     return True
 
 
@@ -1031,12 +1035,12 @@ def main(argv=None):
         print("No notes found.")
         return 1
     print("Saved to: %s" % args.out)
+    ok = True
     if args.sync:
-        sync_with_bear(bundles, dry_run=args.dry_run)
+        ok = sync_with_bear(bundles, dry_run=args.dry_run)
     elif not args.no_import:
-        import_into_bear(bundles)
-    print("Done.")
-    return 0
+        ok = import_into_bear(bundles)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
