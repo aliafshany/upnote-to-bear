@@ -806,7 +806,7 @@ def comparable(text):
     # Bear also drops an image's alt text and renames a file link's label to
     # the filename, so compare attachments by what they point at, not by how
     # they are labelled.
-    return re.sub(r"!?\[[^\]]*\]\(([^)/:\s]+\.[A-Za-z0-9-]{1,24})\)",
+    return re.sub(r"!?\[[^\]]*\]\(([^)/:\s]+\.[A-Za-z0-9_-]{1,24})\)",
                   r"![](\1)", text)
 
 
