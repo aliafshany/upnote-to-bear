@@ -70,7 +70,8 @@ want them, or pass `--no-index` to skip making them.
 - **Note titles containing `/` or `|` cannot be linked.** Bear reads `/` in a
   cross-note link as a heading and `|` as an alias, and gives no way to escape
   either. Links to such notes are written as the note's name in quotation
-  marks rather than as a dead link.
+  marks rather than as a dead link. `--tidy-titles` removes the problem at
+  source.
 - **Two notes with the same title stay two notes with the same title.** A
   cross-note link to that title will land on one of them, and Bear picks
   which.
@@ -127,8 +128,38 @@ python3 upnote2bear.py                  # convert, then import into Bear
 python3 upnote2bear.py --no-import      # convert only, import yourself later
 python3 upnote2bear.py --include-trash  # bring UpNote's trash too, tagged
 python3 upnote2bear.py --no-index       # skip the notebook contents notes
+python3 upnote2bear.py --tidy-titles    # shorten titles clipped from the web
+python3 upnote2bear.py --rename-map my-titles.json
 python3 upnote2bear.py --out ~/somewhere/else
 ```
+
+### Tidier titles
+
+Notes clipped from the web arrive with the whole page title attached —
+`4 Habits of Highly Confident People | by Nick Wignall | Personal Growth |
+Medium`. Worse, a title containing `/` or `|` cannot be the target of a Bear
+cross-note link, and a title starting with `#` is read as a tag.
+
+`--tidy-titles` fixes all of that: it cuts the byline and publication tail,
+replaces `/` and `|` with `-`, removes stray `#`, and caps the title at 70
+characters on a word boundary.
+
+For the titles no rule can guess — a note called `Notes:`, or three notes
+sharing one name — write a `--rename-map`, a JSON file of
+`{"old title": "new title"}`:
+
+```json
+{
+  "Notes:": "Apple ID accounts",
+  "8d13c8f7-07b0-4046-89af-f2a01683846f": "Router — WAN info (4G+)"
+}
+```
+
+A key can be the original title (matched ignoring non-breaking spaces, which
+clipped titles are full of) or an UpNote note id, which is the only way to
+tell apart two notes that share a title. Renames are applied before
+everything else, so the contents notes and cross-note links all use the new
+names.
 
 Run `python3 upnote2bear.py --help` for the full list.
 
@@ -147,7 +178,7 @@ Bear's **File → Import From → Markdown Folder**.
 python3 test_upnote2bear.py
 ```
 
-35 tests covering the conversion, written against the HTML shapes UpNote
+42 tests covering the conversion, written against the HTML shapes UpNote
 actually produces. They use synthetic input, so they need no notes of your own
 and never touch Bear.
 

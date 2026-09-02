@@ -388,6 +388,58 @@ def safe_name(title, fallback):
 
 
 # --------------------------------------------------------------------------
+# tidier titles
+# --------------------------------------------------------------------------
+
+# "Real Title | by Author | Publication | Feb, 2026 | Medium" and friends.
+BYLINE = re.compile(r"\s+\|\s+by\s", re.I)
+TITLE_CAP = 70
+
+
+def tidy_title(title, cap=TITLE_CAP):
+    """Turn a title clipped from the web into something readable in a note
+    list, and remove the characters Bear cannot carry in a cross-note link."""
+    out = unicodedata.normalize("NFC", (title or "").strip())
+
+    byline = BYLINE.search(out)
+    if byline:
+        out = out[:byline.start()]
+    elif " | " in out:
+        # "Some Article | Elemental" - a site name tacked onto the end.
+        head = out.split(" | ")[0].strip()
+        if len(head) >= 25:
+            out = head
+
+    out = out.replace("|", "-").replace("/", "-")
+    # A leading # would be read as a tag, and any # invents one mid-title.
+    out = re.sub(r"#(?=\S)", "", out)
+    out = re.sub(r"\s+", " ", out).strip(" -–—,;:.")
+
+    if len(out) > cap:
+        cut = out[:cap].rsplit(" ", 1)[0]
+        out = (cut if len(cut) >= cap * 0.6 else out[:cap]).rstrip(" -–—,;:.")
+    return out or title
+
+
+def load_renames(path):
+    """Optional JSON of {"original title": "title to use instead"}. A key may
+    also be an UpNote note id, for telling apart notes that share a title."""
+    if not path:
+        return {}
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return {rename_key(k): unicodedata.normalize("NFC", v.strip())
+            for k, v in data.items()}
+
+
+def rename_key(title):
+    """Match on visible text: titles clipped from the web are full of
+    non-breaking spaces that nobody types when writing a rename map."""
+    return unicodedata.normalize(
+        "NFC", WS_RUN.sub(" ", title or "").strip())
+
+
+# --------------------------------------------------------------------------
 # UpNote database
 # --------------------------------------------------------------------------
 
@@ -507,7 +559,7 @@ def index_notes(out_dir, ordered, note_titles, taken):
 
 
 def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
-            log=print):
+            tidy=False, renames=None, log=print):
     image_dir = os.path.join(upnote_dir, "images")
     assets = set(os.listdir(image_dir)) if os.path.isdir(image_dir) else set()
     tags_by_note, ordered = notebook_paths(db)
@@ -543,6 +595,14 @@ def convert(db, out_dir, upnote_dir, include_trash=False, with_index=True,
             plain = to_markdown(row["html"], assets)[0]
             heading = re.search(r"^#{1,6}[ \t]+(.+)$", plain, re.M)
             title = heading.group(1).strip() if heading else ""
+        renames = renames or {}
+        # A rename may be keyed by the note's UpNote id, which is the only way
+        # to tell apart two notes that share a title.
+        renamed = renames.get(row["id"]) or renames.get(rename_key(title))
+        if renamed:
+            title = renamed
+        elif tidy:
+            title = tidy_title(title)
         name = safe_name(title, "Untitled %03d" % index)
         key = name.lower()
         used_names[key] = used_names.get(key, 0) + 1
@@ -680,6 +740,12 @@ def main(argv=None):
     parser.add_argument("--include-trash", action="store_true",
                         help="also copy notes sitting in UpNote's trash, "
                              "tagged #UpNote Trash#")
+    parser.add_argument("--tidy-titles", action="store_true",
+                        help="shorten titles clipped from the web and drop "
+                             "the characters Bear cannot link to")
+    parser.add_argument("--rename-map", metavar="FILE",
+                        help="JSON file of {\"old title\": \"new title\"} "
+                             "applied before everything else")
     parser.add_argument("--no-index", action="store_true",
                         help="skip the per-notebook contents notes that "
                              "record UpNote's manual note order")
@@ -690,7 +756,9 @@ def main(argv=None):
     db = open_upnote(args.work_dir, args.upnote_dir)
     bundles = convert(db, args.out, args.upnote_dir,
                       include_trash=args.include_trash,
-                      with_index=not args.no_index)
+                      with_index=not args.no_index,
+                      tidy=args.tidy_titles,
+                      renames=load_renames(args.rename_map))
     if not bundles:
         print("No notes found.")
         return 1

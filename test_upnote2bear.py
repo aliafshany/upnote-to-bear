@@ -7,7 +7,8 @@ your own are needed and nothing is imported into Bear.
 
 import unittest
 
-from upnote2bear import bear_tag, safe_name, to_markdown, wiki_link
+from upnote2bear import (bear_tag, rename_key, safe_name, tidy_title,
+                         to_markdown, wiki_link)
 
 
 def md(html, assets=(), titles=None):
@@ -151,6 +152,38 @@ class Naming(unittest.TestCase):
 
     def test_long_title_is_truncated(self):
         self.assertEqual(len(safe_name("x" * 200, "f")), 80)
+
+
+class TidyTitles(unittest.TestCase):
+    def test_medium_byline_tail_is_cut(self):
+        self.assertEqual(
+            tidy_title("4 Habits of Highly Confident People | by Nick Wignall"
+                       " | Personal Growth | Medium"),
+            "4 Habits of Highly Confident People")
+
+    def test_site_name_tail_is_cut(self):
+        self.assertEqual(
+            tidy_title("The Psychological Effects of Quarantine | Elemental"),
+            "The Psychological Effects of Quarantine")
+
+    def test_short_first_segment_is_kept_whole(self):
+        # Not a site tail: both halves carry meaning.
+        self.assertEqual(tidy_title("Part 1 | Intro"), "Part 1 - Intro")
+
+    def test_leading_hash_would_become_a_tag(self):
+        self.assertEqual(tidy_title("#XMPlus node config"), "XMPlus node config")
+
+    def test_slash_and_pipe_are_replaced(self):
+        self.assertEqual(tidy_title("5G/4G Wireless Router"),
+                         "5G-4G Wireless Router")
+
+    def test_long_title_is_cut_at_a_word_boundary(self):
+        out = tidy_title("word " * 40)
+        self.assertLessEqual(len(out), 70)
+        self.assertFalse(out.endswith("wor"))
+
+    def test_rename_key_ignores_non_breaking_spaces(self):
+        self.assertEqual(rename_key("a\u00a0b"), rename_key("a b"))
 
 
 class Links(unittest.TestCase):
