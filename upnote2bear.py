@@ -776,11 +776,17 @@ def bear_notes():
             if os.path.exists(BEAR_DB + suffix):
                 shutil.copy2(BEAR_DB + suffix, tmp + suffix)
         db = sqlite3.connect(tmp)
+        # Notes Bear already holds files for: removing an attachment in
+        # UpNote has to replace such a note, not just rewrite its text, or
+        # the file is left behind with nothing pointing at it.
+        with_files = {r[0] for r in db.execute(
+            "select distinct n.ZUNIQUEIDENTIFIER from ZSFNOTEFILE f "
+            "join ZSFNOTE n on n.Z_PK = f.ZNOTE")}
         by_id, by_title = {}, {}
         for uid, title, text in db.execute(
                 "select ZUNIQUEIDENTIFIER, ZTITLE, ZTEXT from ZSFNOTE "
                 "where ZTRASHED = 0"):
-            record = (uid, text or "")
+            record = (uid, text or "", uid in with_files)
             marker = MARKER_RE.search(text or "")
             if marker:
                 by_id[marker.group(1)] = record
@@ -835,18 +841,18 @@ def sync_with_bear(bundles, dry_run=False, log=print):
         if match is None:
             new.append((bundle, title))
         elif comparable(match[1]) != comparable(text):
-            changed.append((bundle, title, match[0], text))
+            changed.append((bundle, title, match[0], text, match[2]))
         else:
             unchanged += 1
 
-    gone = [(uid, nid) for nid, (uid, _) in by_id.items() if nid not in seen]
+    gone = [(uid, nid) for nid, (uid, _, _) in by_id.items() if nid not in seen]
 
     log("New %d, changed %d, unchanged %d, gone from UpNote %d."
         % (len(new), len(changed), unchanged, len(gone)))
     if dry_run:
         for _, title in new:
             log("  new      %s" % title[:64])
-        for _, title, _, _ in changed:
+        for _, title, _, _, _ in changed:
             log("  changed  %s" % title[:64])
         for uid, nid in gone:
             log("  trash    %s" % nid)
@@ -857,10 +863,10 @@ def sync_with_bear(bundles, dry_run=False, log=print):
         subprocess.run(["open", bear_url("trash", id=uid)], check=False)
         time.sleep(1.5)
 
-    for bundle, title, uid, text in changed:
-        has_assets = os.path.isdir(os.path.join(bundle, "assets")) and \
-            os.listdir(os.path.join(bundle, "assets"))
-        if has_assets or len(text) > URL_TEXT_LIMIT:
+    for bundle, title, uid, text, bear_has_files in changed:
+        assets = os.path.join(bundle, "assets")
+        has_assets = os.path.isdir(assets) and os.listdir(assets)
+        if has_assets or bear_has_files or len(text) > URL_TEXT_LIMIT:
             # Attachments cannot travel through a URL, and a very long one is
             # unreliable, so replace the note wholesale.
             subprocess.run(["open", bear_url("trash", id=uid)], check=False)
