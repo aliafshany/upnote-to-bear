@@ -130,6 +130,7 @@ python3 upnote2bear.py --include-trash  # bring UpNote's trash too, tagged
 python3 upnote2bear.py --no-index       # skip the notebook contents notes
 python3 upnote2bear.py --tidy-titles    # shorten titles clipped from the web
 python3 upnote2bear.py --rename-map my-titles.json
+python3 upnote2bear.py --tag-map my-tags.json
 python3 upnote2bear.py --out ~/somewhere/else
 ```
 
@@ -160,6 +161,23 @@ clipped titles are full of) or an UpNote note id, which is the only way to
 tell apart two notes that share a title. Renames are applied before
 everything else, so the contents notes and cross-note links all use the new
 names.
+
+### Renaming notebooks
+
+Renaming a tag inside Bear works, but the next run of this tool brings the
+old name back, because the export is rebuilt from UpNote every time. Do it
+with `--tag-map` instead, in the same JSON shape:
+
+```json
+{ "1- Projects": "1-Projects", "4- Archives": "4-Archive" }
+```
+
+Child notebooks follow their parent, so `1- Projects/Trade` becomes
+`1-Projects/Trade` without being listed.
+
+One reason to bother: Bear needs a closing hash on any tag containing a
+space, so `#1- Projects#` must be typed in full every time, while
+`#1-Projects` does not.
 
 Run `python3 upnote2bear.py --help` for the full list.
 
